@@ -153,8 +153,9 @@ func pruneUsersFromList(
 				} else if err != nil {
 					ybtools.PanicErr("Failed when querying DB for redirects with error ", err)
 				}
-				// A redirect was found!
-				outputFromQueryRow = strings.ReplaceAll(outputFromQueryRow, "_", " ")
+				// A redirect was found! Replace underscores with spaces, and if it redirects to a subpage,
+				// get the corresponding root page, before a /, for the user (which is, after all, their username).
+				outputFromQueryRow = strings.SplitN(strings.ReplaceAll(outputFromQueryRow, "_", " "), "/", 2)[0]
 				log.Println("Found a redirect for", username, "so replacing them on", pageTitle, "with", outputFromQueryRow)
 				usersToReplace[username] = outputFromQueryRow
 				// this is here to make sure that the redirect target is also checked for indefs
