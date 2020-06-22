@@ -130,7 +130,28 @@ func processArticle(w *mwclient.Client, pageTitle, pageContent, revTS, curTS str
 		return
 	}
 
-	newPageContent, numExpired, numIndeffed, numRenamed, expiredUsers, _ := pruneUsersFromList(pageTitle, pageContent, formatRegex, inactivityTimestamp)
+	var blockTimestamp time.Time
+	// If a parameter `indeffed` is specified, parse that as the blockTimestamp
+	if parameters["indeffed"] != "" {
+		if parameters["indeffed"] == "0" {
+			// special case: immediately.
+			// this is a special case because tparse doesn't currently support unitless zero as a duration
+			// https://github.com/karrick/tparse/issues/2
+			blockTimestamp = time.Now()
+		} else {
+			blockTimestamp, err = tparse.AddDuration(time.Now(), "-"+strings.ReplaceAll(parameters["indeffed"], " ", ""))
+			if err != nil {
+				log.Println(pageTitle, "has an invalid indeffed time value of", parameters["indeffed"], "so using default")
+			}
+		}
+	}
+
+	if blockTimestamp == (time.Time{}) {
+		// Otherwise, default to removing blocked users after two months
+		blockTimestamp = time.Now().AddDate(0, -2, 0)
+	}
+
+	newPageContent, numExpired, numIndeffed, numRenamed, expiredUsers, _ := pruneUsersFromList(pageTitle, pageContent, formatRegex, inactivityTimestamp, blockTimestamp)
 
 	if newPageContent == pageContent {
 		log.Println("newPageContent was the same as pageContent on page", pageTitle, "so ignoring")

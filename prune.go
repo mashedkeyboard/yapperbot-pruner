@@ -36,13 +36,15 @@ type preppedStatementsCallback func()
 
 const indeffedUsers, inactiveUsers int8 = 0, 1
 
+const mediaWikiTimestampFormat string = "20060102150405"
+
 const lastEditQueryTemplate string = `SELECT actor_user.actor_name FROM revision_userindex
 INNER JOIN actor_user ON actor_user.actor_name = ? AND actor_id = rev_actor
 WHERE rev_timestamp > ? LIMIT 1;`
 
 const blockQueryTemplate string = `SELECT ipb_id FROM ipblocks
 INNER JOIN user ON user_name = ? AND user_id = ipb_user
-WHERE ipb_expiry = "infinity" LIMIT 1;`
+WHERE ipb_expiry = "infinity" AND ipb_timestamp < ? LIMIT 1;`
 
 const userRedirectQueryTemplate string = `SELECT rd_title FROM redirect
 INNER JOIN page ON page_namespace = 3 AND page_title = ? AND rd_from = page_id
@@ -103,7 +105,9 @@ func withDatabaseConnection(cb preppedStatementsCallback) {
 // needs to remove, and returns the new page content, the number of expired users,
 // number of indeffed users, number of renamed users, an array of the expired users,
 // and a map of the renamed users (with their old name as the key, and their new name as the value).
-func pruneUsersFromList(pageTitle string, pageContent string, formatRegex *regexp.Regexp, inactivityTs time.Time) (string, int, int, int, []string, map[string]string) {
+func pruneUsersFromList(
+	pageTitle string, pageContent string, formatRegex *regexp.Regexp, inactivityTs time.Time, blockTs time.Time) (
+	string, int, int, int, []string, map[string]string) {
 	var regexBuilder strings.Builder
 	var checkedUsers = map[string]bool{}
 
@@ -112,7 +116,10 @@ func pruneUsersFromList(pageTitle string, pageContent string, formatRegex *regex
 	var usersToRemove = map[int8][]string{}
 
 	var formatRegexAsString string = formatRegex.String()
-	var editsSinceStamp string = inactivityTs.Format("20060102210405") // format in line with https://www.mediawiki.org/wiki/Manual:Timestamp
+
+	// format in line with https://www.mediawiki.org/wiki/Manual:Timestamp
+	var editsSinceStamp string = inactivityTs.Format(mediaWikiTimestampFormat)
+	var blockStamp string = blockTs.Format(mediaWikiTimestampFormat)
 
 	for _, match := range formatRegex.FindAllStringSubmatch(pageContent, -1) {
 		var outputFromQueryRow string
@@ -158,7 +165,7 @@ func pruneUsersFromList(pageTitle string, pageContent string, formatRegex *regex
 		}
 
 		// if they still aren't being pruned, check whether they're indefinitely blocked
-		err = blockQuery.QueryRow(dbUsername).Scan(&outputFromQueryRow)
+		err = blockQuery.QueryRow(dbUsername, blockStamp).Scan(&outputFromQueryRow)
 		if err == nil {
 			// the user is indeffed, as a row has been found
 			log.Println("Queuing indeffed user", username, "on title", pageTitle, "for pruning")
@@ -185,59 +192,64 @@ func pruneUsersFromList(pageTitle string, pageContent string, formatRegex *regex
 
 	*/
 
-	regexBuilder.WriteString(`(?im)`) // Always case-insensitive and multiline
+	usersToRemoveTotal := len(usersToRemove[indeffedUsers]) + len(usersToRemove[inactiveUsers])
+	if usersToRemoveTotal > 0 {
+		regexBuilder.WriteString(`(?im)`) // Always case-insensitive and multiline
 
-	regexUsersToRemove := make([]string, len(usersToRemove[indeffedUsers])+len(usersToRemove[inactiveUsers]))
-	var i int
-	for _, usersForRemoval := range [][]string{usersToRemove[indeffedUsers], usersToRemove[inactiveUsers]} {
-		for _, user := range usersForRemoval {
-			// Each of these strings needs to be regex-escaped (hence QuoteMeta),
-			// but we're also using them in ReplaceAllString, so $ needs to be escaped as $$ too.
-			regexUsersToRemove[i] = strings.ReplaceAll(regexp.QuoteMeta(user), "$", "$$")
-			i++
+		regexUsersToRemove := make([]string, usersToRemoveTotal)
+		var i int
+		for _, usersForRemoval := range [][]string{usersToRemove[indeffedUsers], usersToRemove[inactiveUsers]} {
+			for _, user := range usersForRemoval {
+				// Each of these strings needs to be regex-escaped (hence QuoteMeta),
+				// but we're also using them in ReplaceAllString, so $ needs to be escaped as $$ too.
+				regexUsersToRemove[i] = strings.ReplaceAll(regexp.QuoteMeta(user), "$", "$$")
+				i++
+			}
 		}
-	}
 
-	regexBuilder.WriteString(
-		// From within the format regex, replace the capture group (there should only be one, per spec)
-		// plus the first character before the capture group (see regexReplaceCaptureGroup's comment)
-		// with the first character, followed by the usersToRemove list, separated by pipes, in a group
-		// (i.e. "match any one of the usernames given" in place of "find a username")
-		regexReplaceCaptureGroup.ReplaceAllString(
-			formatRegexAsString, ("$1(" + strings.Join(regexUsersToRemove, "|") + ")")))
+		regexBuilder.WriteString(
+			// From within the format regex, replace the capture group (there should only be one, per spec)
+			// plus the first character before the capture group (see regexReplaceCaptureGroup's comment)
+			// with the first character, followed by the usersToRemove list, separated by pipes, in a group
+			// (i.e. "match any one of the usernames given" in place of "find a username")
+			regexReplaceCaptureGroup.ReplaceAllString(
+				formatRegexAsString, ("$1(" + strings.Join(regexUsersToRemove, "|") + ")")))
 
-	regexBuilder.WriteString(`\n?`) // optionally match a newline at the end, to not leave empty space
+		regexBuilder.WriteString(`\n?`) // optionally match a newline at the end, to not leave empty space
 
-	builtRegexForRemoval, err := regexp.Compile(regexBuilder.String())
-	if err != nil {
-		ybtools.PanicErr("Failed to build builtRegexForRemoval from regexBuilder with error ", err)
-	}
-
-	pageContent = builtRegexForRemoval.ReplaceAllString(pageContent, "")
-
-	captureGroupStringIndex := regexReplaceCaptureGroup.FindStringIndex(formatRegexAsString)
-	for old, new := range usersToReplace {
-		var regexRenameBuilder strings.Builder
-
-		regexRenameBuilder.WriteString("(?im)(")
-		// Write everything up to the start of the capture group, in a capture group this time.
-		// Note the +1; this is because regexReplaceCaptureGroup also matches the character
-		// before the capture group, as discussed earlier.
-		regexRenameBuilder.WriteString(formatRegexAsString[:captureGroupStringIndex[0]+1])
-		regexRenameBuilder.WriteString(")")
-		regexRenameBuilder.WriteString(old)
-		regexRenameBuilder.WriteString("(")
-		// Write the rest of the regex, in a capture group again.
-		regexRenameBuilder.WriteString(formatRegexAsString[captureGroupStringIndex[1]+1:])
-		regexRenameBuilder.WriteString(")")
-
-		builtRegexForRename, err := regexp.Compile(regexRenameBuilder.String())
+		builtRegexForRemoval, err := regexp.Compile(regexBuilder.String())
 		if err != nil {
-			ybtools.PanicErr("Failed to build builtRegexForRename from regexRenameBuilder with error ", err)
+			ybtools.PanicErr("Failed to build builtRegexForRemoval from regexBuilder with error ", err)
 		}
 
-		// Now we actually replace each occurrence, putting the relevant bits in the relevant places.
-		pageContent = builtRegexForRename.ReplaceAllString(pageContent, "$1"+strings.ReplaceAll(new, "$", "$$")+"$2")
+		pageContent = builtRegexForRemoval.ReplaceAllString(pageContent, "")
+	}
+
+	if len(usersToReplace) > 0 {
+		captureGroupStringIndex := regexReplaceCaptureGroup.FindStringIndex(formatRegexAsString)
+		for old, new := range usersToReplace {
+			var regexRenameBuilder strings.Builder
+
+			regexRenameBuilder.WriteString("(?im)(")
+			// Write everything up to the start of the capture group, in a capture group this time.
+			// Note the +1; this is because regexReplaceCaptureGroup also matches the character
+			// before the capture group, as discussed earlier.
+			regexRenameBuilder.WriteString(formatRegexAsString[:captureGroupStringIndex[0]+1])
+			regexRenameBuilder.WriteString(")")
+			regexRenameBuilder.WriteString(old)
+			regexRenameBuilder.WriteString("(")
+			// Write the rest of the regex, in a capture group again.
+			regexRenameBuilder.WriteString(formatRegexAsString[captureGroupStringIndex[1]+1:])
+			regexRenameBuilder.WriteString(")")
+
+			builtRegexForRename, err := regexp.Compile(regexRenameBuilder.String())
+			if err != nil {
+				ybtools.PanicErr("Failed to build builtRegexForRename from regexRenameBuilder with error ", err)
+			}
+
+			// Now we actually replace each occurrence, putting the relevant bits in the relevant places.
+			pageContent = builtRegexForRename.ReplaceAllString(pageContent, "$1"+strings.ReplaceAll(new, "$", "$$")+"$2")
+		}
 	}
 
 	return pageContent, len(usersToRemove[inactiveUsers]), len(usersToRemove[indeffedUsers]), len(usersToReplace),
