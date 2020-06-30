@@ -175,6 +175,10 @@ func processArticle(w *mwclient.Client, pageTitle, pageContent, revTS, curTS str
 
 	editSummaryBuilder.WriteString(strings.Join(summaryActionsTaken, "; "))
 
+	if !ybtools.CanEdit() {
+		return
+	}
+
 	err = w.Edit(params.Values{
 		"title":          pageTitle,
 		"text":           newPageContent,
