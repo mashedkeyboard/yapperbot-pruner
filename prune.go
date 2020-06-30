@@ -250,7 +250,7 @@ func pruneUsersFromList(
 			}
 
 			// Now we actually replace each occurrence, putting the relevant bits in the relevant places.
-			pageContent = builtRegexForRename.ReplaceAllString(pageContent, "$1"+strings.ReplaceAll(new, "$", "$$")+"$2")
+			pageContent = builtRegexForRename.ReplaceAllString(pageContent, "${1}"+strings.ReplaceAll(new, "$", "$$")+"${2}")
 		}
 	}
 
