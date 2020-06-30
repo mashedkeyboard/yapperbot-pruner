@@ -115,7 +115,8 @@ func pruneUsersFromList(
 	// in the below map, we use int8 as the key, because we have consts indeffed and inactiveUsers
 	var usersToRemove = map[int8][]string{}
 
-	var formatRegexAsString string = formatRegex.String()
+	// Remove the (?im) here as it'll later be in a capture group; we add it back in afterwards
+	var formatRegexAsString string = strings.TrimPrefix(formatRegex.String(), "(?im)")
 
 	// format in line with https://www.mediawiki.org/wiki/Manual:Timestamp
 	var editsSinceStamp string = inactivityTs.Format(mediaWikiTimestampFormat)
@@ -237,10 +238,10 @@ func pruneUsersFromList(
 			// before the capture group, as discussed earlier.
 			regexRenameBuilder.WriteString(formatRegexAsString[:captureGroupStringIndex[0]+1])
 			regexRenameBuilder.WriteString(")")
-			regexRenameBuilder.WriteString(old)
+			regexRenameBuilder.WriteString(regexp.QuoteMeta(old))
 			regexRenameBuilder.WriteString("(")
 			// Write the rest of the regex, in a capture group again.
-			regexRenameBuilder.WriteString(formatRegexAsString[captureGroupStringIndex[1]+1:])
+			regexRenameBuilder.WriteString(formatRegexAsString[captureGroupStringIndex[1]:])
 			regexRenameBuilder.WriteString(")")
 
 			builtRegexForRename, err := regexp.Compile(regexRenameBuilder.String())
