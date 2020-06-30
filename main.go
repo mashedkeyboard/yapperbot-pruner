@@ -32,7 +32,7 @@ import (
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-const templateExpression string = `\s*?((?:\|.*)*)`
+const templateExpression string = `\s*?((?:\|.*\s*?)*)`
 const editSummaryOpening string = `Pruning users as configured on page: processed `
 const editSummaryUsersExpired string = `%d inactive user(s)`
 const editSummaryUsersIndeffed string = `%d indeffed user(s)`
