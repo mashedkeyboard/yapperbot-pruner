@@ -145,7 +145,9 @@ func pruneUsersFromList(
 			if err == sql.ErrNoRows {
 				// they haven't edited in the timeframe, or they have redirected
 				// check a redirect for them
-				err := userRedirectQuery.QueryRow(dbUsername).Scan(&outputFromQueryRow)
+				// annoyingly, unlike the user database rows, the page rows have spaces as underscores,
+				// so we have to use this with the inverse replacement we use for all the other checks
+				err := userRedirectQuery.QueryRow(strings.ReplaceAll(dbUsername, " ", "_")).Scan(&outputFromQueryRow)
 				if err == sql.ErrNoRows {
 					// No redirect found, just remove them
 					log.Println("Queuing", username, "on title", pageTitle, "for pruning")
