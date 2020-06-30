@@ -262,6 +262,13 @@ func processArticle(w *mwclient.Client, pageTitle, pageContent, revTS, curTS str
 
 			ybtools.PanicErr("API error raised, can't handle, so failing. Error was ", err)
 		default:
+			if err == mwclient.ErrEditNoChange {
+				// Normally this would only happen if two instances ran at the same time or very close to one another.
+				// It may also happen in the case of a very long-running process, that misses an update to a page in the mean time.
+				// It's very rare, but theoretically possible.
+				log.Println("No change made to page", pageTitle, "so assuming something already fixed it and ignoring")
+				return
+			}
 			ybtools.PanicErr("Non-API error raised, can't handle, so failing. Error was ", err)
 		}
 	}
