@@ -251,8 +251,26 @@ func pruneUsersFromList(
 				ybtools.PanicErr("Failed to build builtRegexForRename from regexRenameBuilder with error ", err)
 			}
 
+			// Generate the replacement that we want to use
+			b := builtRegexForRename.ExpandString(
+				[]byte{},
+				"${1}"+strings.ReplaceAll(new, "$", "$$")+"${2}",
+				pageContent,
+				builtRegexForRename.FindStringSubmatchIndex(pageContent),
+			)
+
 			// Now we actually replace each occurrence, putting the relevant bits in the relevant places.
-			pageContent = builtRegexForRename.ReplaceAllString(pageContent, "${1}"+strings.ReplaceAll(new, "$", "$$")+"${2}")
+			pageContent = builtRegexForRename.ReplaceAllStringFunc(pageContent, func(string) string {
+				// replace User talk links within the match too
+				return strings.ReplaceAll(
+					// replace very simple user link confusions too; if they're more complicated, for instance a
+					// funky styled signature, we won't get into that as it all gets a bit complicated then.
+					// the links will still work at least
+					strings.ReplaceAll(string(b), "[[User:"+new+"|"+old+"]]", "[[User:"+new+"|"+new+"]]"),
+					"User talk:"+old,
+					"User talk:"+new,
+				)
+			})
 		}
 	}
 
